@@ -44,7 +44,6 @@ player_radius = 20
 
 # Petal settings
 PETAL_COUNT = 8
-PETAL_RADIUS = 50       # Distance from player
 PETAL_SIZE = 10
 PETAL_COLOR = (255, 0, 0)
 PETAL_SPEED = 2         # Degrees per frame
@@ -52,32 +51,53 @@ PETAL_SPEED = 2         # Degrees per frame
 
 
 petal_offset = 0
+petal_radius = 50       # Distance from player
+
 
 camera_x = 0
 camera_y = 0
 
-bee_image = pygame.image.load('bee.png')
+player_health = 1000
+player_max_health = 1000
+knockback_dx = 0
+knockback_dy = 0
+knockback_timer = 0
 
+
+basic_image_not_scaled = pygame.image.load('assets/basic.png')
+pollen_image_not_scaled = pygame.image.load('assets/pollen.png')
+stinger_image_not_scaled = pygame.image.load('assets/stinger.png')
+missile_image_not_scaled = pygame.image.load('assets/missile.png')
+
+basic_image = pygame.transform.scale(basic_image_not_scaled, (PETAL_SIZE*2, PETAL_SIZE*2))
+pollen_image = pygame.transform.scale(pollen_image_not_scaled, (PETAL_SIZE*2, PETAL_SIZE*2))
+stinger_image = pygame.transform.scale(stinger_image_not_scaled, (PETAL_SIZE*2, PETAL_SIZE*2))
+missile_image = pygame.transform.scale(missile_image_not_scaled, (PETAL_SIZE*4, PETAL_SIZE*2))
+
+
+common_bee_image = pygame.image.load('assets/bee.png')
+unusual_bee_image = pygame.transform.scale_by(common_bee_image, 1.5)
 
 
 class Petal:
-    def __init__(self, angle, reload = 20, color = PETAL_COLOR, shootable = False, pollen = False, ret_time = 60, damage = 10,
-                  name = ""):
-        self.angle = angle      # Angle in degrees
-        self.state = "orbiting" # "orbiting" or "shot"
+    def __init__(self, angle, reload = 20, color = basic_image, shootable = False, pollen = False, ret_time = 60, damage = 10,
+                  name = "", rarity_color = (0, 255, 0)):
+        self.angle = angle           # Angle in degrees
+        self.state = "orbiting"      # "orbiting" or "shot"
         self.shootable = shootable   # Shootable?
         self.x = 0
         self.y = 0
-        self.speed = 10         # Speed when shot
-        self.radius = 10        # Draw size
-        self.return_timer = 0   # Frames before returning
-        self.reload_timer = 0  # Frames before it can reappear
+        self.speed = 10              # Speed when shot
+        self.radius = PETAL_SIZE     # Hitbox size
+        self.return_timer = 0        # Frames before returning
+        self.reload_timer = 0        # Frames before it can reappear
         self.reload = reload
         self.pollen = pollen
         self.color = color
         self.return_time = ret_time
         self.damage = damage
         self.name = name
+        self.rarity_color = rarity_color
 
     def update(self, player_pos):
         # Rotate
@@ -85,8 +105,8 @@ class Petal:
         if self.state == "orbiting":
             # Orbit around player
             rad = math.radians(self.angle)
-            self.x = player_pos[0] + PETAL_RADIUS * math.cos(rad)
-            self.y = player_pos[1] + PETAL_RADIUS * math.sin(rad)
+            self.x = player_pos[0] + petal_radius * math.cos(rad)
+            self.y = player_pos[1] + petal_radius * math.sin(rad)
         elif self.state == "shot":
             # Move outward in the set direction
             if self.pollen:
@@ -99,8 +119,8 @@ class Petal:
                 self.state = "orbiting"
         elif self.state == "reloading":
             rad = math.radians(self.angle)
-            self.x = player_pos[0] + PETAL_RADIUS * math.cos(rad)
-            self.y = player_pos[1] + PETAL_RADIUS * math.sin(rad)
+            self.x = player_pos[0] + petal_radius * math.cos(rad)
+            self.y = player_pos[1] + petal_radius * math.sin(rad)
             self.reload_timer -= 1
             if self.reload_timer <= 0:
                 self.state = "orbiting"
@@ -120,10 +140,17 @@ class Petal:
 
     def draw(self, surface):
         if self.state != "reloading":  # Don't draw while reloading
-            pygame.draw.circle(surface, self.color, (int(self.x - camera_x), int(self.y - camera_y)), self.radius)
+            if self.state == "orbiting":
+                # pygame.draw.circle(surface, self.color, (int(self.x - camera_x), int(self.y - camera_y)), self.radius)
+                util.blitRotate2(surface, self.color, (int(self.x - camera_x)-self.color.get_width() // 2, 
+                            int(self.y - camera_y)-self.color.get_height() // 2), -self.angle)
+            else:
+                util.blitRotate2(surface, self.color, (int(self.x - camera_x)-self.color.get_width() // 2, 
+                            int(self.y - camera_y)-self.color.get_height() // 2), -math.atan2(self.dy, self.dx)/math.pi*180)
+
 
 class Mob:
-    def __init__(self, x, y, size=15, texture=bee_image, health=15, drops=[]):
+    def __init__(self, x, y, size=15, texture=common_bee_image, health=15, drops=[], damage = 1):
         self.x = x
         self.y = y
         self.dx = 0
@@ -134,12 +161,14 @@ class Mob:
         self.health = health
         self.drops = drops
         self.angry = False
+        self.damage = damage
 
     def update(self, player_pos):
         self.x += self.dx
         self.y += self.dy
         self.dx = min(max(self.dx, -self.speed), self.speed)
         self.dy = min(max(self.dy, -self.speed), self.speed)
+        
         
         # self.x = min(max(self.x, self.radius), MAP_WIDTH - self.radius)
         # self.y = min(max(self.y, self.radius), MAP_HEIGHT - self.radius)
@@ -160,41 +189,65 @@ class Mob:
             dx = player_pos[0] - self.x
             dy = player_pos[1] - self.y
             dist = max(1, (dx**2 + dy**2)**0.5)  # Avoid division by 0
-            self.dx += dx / dist * self.speed / 5
-            self.dy += dy / dist * self.speed / 5
+            self.dx += dx / dist * self.speed / 10
+            self.dy += dy / dist * self.speed / 10
         else:
             # Move randomly
-            self.dx += (random.random()-0.5) * self.speed/5
-            self.dy += (random.random()-0.5) * self.speed/5
+            self.dx += (random.random()-0.5) * self.speed/10
+            self.dy += (random.random()-0.5) * self.speed/10
 
     def draw(self, surface):
         # pygame.draw.circle(surface, self.color, (int(self.x - camera_x), int(self.y - camera_y)), self.radius)
         util.blitRotate2(surface, self.texture, (int(self.x - camera_x) - self.texture.get_width() // 2, 
-                          int(self.y - camera_y) - self.texture.get_height() // 2), -math.atan2(self.dy, self.dx))
+                          int(self.y - camera_y) - self.texture.get_height() // 2), -math.atan2(self.dy, self.dx)/math.pi*180)
         
 
 class Drop:
     def __init__(self, x, y, petal):
         self.x = x
         self.y = y
-        self.radius = 8
+        self.radius = 10
         self.petal = petal
         self.timer = 600
 
     def draw(self, surface):
-        pygame.draw.circle(surface, self.petal.color, (int(self.x - camera_x), int(self.y - camera_y)), self.radius)
+        # pygame.draw.circle(surface, self.petal.color, (int(self.x - camera_x), int(self.y - camera_y)), self.radius)
+        screen.blit(self.petal.color, (int(self.x - camera_x)-self.radius, int(self.y - camera_y)-self.radius))
+        # util.blitRotate2(surface, basic_image, (int(self.x - camera_x)-self.radius, 
+        #                     int(self.y - camera_y)-self.radius), 0)
 
 
-pollen = Petal(0, 30, (255, 216, 0), True, True, 150, 19, "Pollen")
-stinger = Petal(0, 300, (0, 0, 0), damage = 100, name = "Stinger")
-basic = Petal(0, 75, (216, 216, 216), name="Basic")
-missile = Petal(0, 45, (64, 64, 64), True, damage = 75, name = "Missile")
+# Petals
 
 
-gen_basic = lambda i: Petal(i * (360 // PETAL_COUNT), 75, (216, 216, 216), name="Basic")
+basic = Petal(0, 75, basic_image, name="Basic")
+
+cpollen = Petal(0, 30, pollen_image, True, True, 150, 19, "Pollen")
+cstinger = Petal(0, 300, stinger_image, damage = 100, name = "Stinger")
+cmissile = Petal(0, 45, missile_image, True, damage = 25, name = "Missile")
+
+
+upollen = Petal(0, 30, pollen_image, True, True, 150, 57, "Pollen", (255, 216, 0))
+ustinger = Petal(0, 300, stinger_image, damage = 300, name = "Stinger", rarity_color=(255, 216, 0))
+umissile = Petal(0, 45, missile_image, True, damage = 75, name = "Missile", rarity_color=(255, 216, 0))
+
+cbee = Mob(500, 500, 40, drops = [Drop(0, 0, cpollen), Drop(0, 0, cstinger), Drop(0, 0, cmissile)], health=37, damage = 50)
+ubee = Mob(1500, 1500, 60, unusual_bee_image, 140, [Drop(0, 0, upollen), Drop(0, 0, ustinger), Drop(0, 0, umissile)], damage = 150)
+
+
+gen_basic = lambda i: Petal(i * (360 // PETAL_COUNT), 75, basic_image, name="Basic")
 
 inventory = [None] * (INVENTORY_ROWS * INVENTORY_COLS)
 loadout = [gen_basic(i) for i in range(PETAL_COUNT)]
+
+def stack(stack, petal):
+    if (not stack or (stack[0].name == petal.name and
+                        stack[0].rarity_color == petal.rarity_color)):
+        if not stack:
+            return (petal, 1)
+        else:
+            return (stack[0], stack[1]+1)
+    return None
 
 def update_camera(player_pos):
     global camera_x, camera_y
@@ -257,14 +310,24 @@ def draw_inventory(screen):
             rect = pygame.Rect(20 + col * (SLOT_SIZE + 5), 
                                20 + row * (SLOT_SIZE + 5), 
                                SLOT_SIZE, SLOT_SIZE)
-            pygame.draw.rect(screen, (200, 200, 200), rect, 2)
+            
+            try:
+                pygame.draw.rect(screen, inventory[idx][0].rarity_color, rect)
+            except:
+                pygame.draw.rect(screen, (255, 255, 255), rect)
 
+            pygame.draw.rect(screen, (0, 0, 0), rect, 2)
+            
 
             if inventory[idx]:
                 # text = font.render(inventory[idx][0].name[0], True, inventory[idx][0].color)
                 # screen.blit(text, (rect.x + 10, rect.y + 10))
-                pygame.draw.circle(screen, inventory[idx][0].color, (rect.x + SLOT_SIZE // 2, rect.y + SLOT_SIZE // 2), 10)
-                text = font.render(str(inventory[idx][1]), True, inventory[idx][0].color)
+                # pygame.draw.circle(screen, inventory[idx][0].color, (rect.x + SLOT_SIZE // 2, rect.y + SLOT_SIZE // 2), 10)
+
+                screen.blit(inventory[idx][0].color, (rect.x + SLOT_SIZE // 2 - inventory[idx][0].color.get_width() // 2, 
+                                                      rect.y + SLOT_SIZE // 2 - inventory[idx][0].color.get_height() // 2))
+                
+                text = font.render(str(inventory[idx][1]), True, (0, 0, 0))
                 screen.blit(text, (rect.x + SLOT_SIZE - 10, rect.y + SLOT_SIZE - 10))
 
 def draw_loadout(screen):
@@ -272,12 +335,32 @@ def draw_loadout(screen):
     y = screen.get_height() - SLOT_SIZE - 20
     for i in range(len(loadout)):
         rect = pygame.Rect(100 + i * (SLOT_SIZE + 5), y, SLOT_SIZE, SLOT_SIZE)
-        pygame.draw.rect(screen, (150, 150, 255), rect, 2)
+        # pygame.draw.rect(screen, loadout[i].rarity_color, rect, 2)
+
+        try:
+            pygame.draw.rect(screen, loadout[i].rarity_color, rect)
+        except:
+            pygame.draw.rect(screen, (255, 255, 255), rect)
+            # pygame.draw.rect(screen, loadout[i][0].rarity_color, rect)
+
+        pygame.draw.rect(screen, (0, 0, 0), rect, 2)
+       
 
         if loadout[i]:
             # text = font.render(loadout[i].name[0], True, loadout[i].color)
-            pygame.draw.circle(screen, loadout[i].color, (rect.x + SLOT_SIZE // 2, rect.y + SLOT_SIZE // 2), 10)
+            # pygame.draw.circle(screen, loadout[i].color, (rect.x + SLOT_SIZE // 2, rect.y + SLOT_SIZE // 2), 10)
+            screen.blit(loadout[i].color, (rect.x + SLOT_SIZE // 2 - loadout[i].color.get_width() // 2, 
+                                           rect.y + SLOT_SIZE // 2 - loadout[i].color.get_height() // 2))
             # screen.blit(text, (rect.x + 10, rect.y + 10))
+
+def draw_health_bar(surface, x, y, health, max_health, width=player_radius*4, height=20):
+    # Background
+    pygame.draw.rect(surface, (100, 100, 100), (x, y, width, height))
+    # Foreground (scaled to health)
+    health_width = int(width * (health / max_health))
+    pygame.draw.rect(surface, (0, 255, 0), (x, y, health_width, height))
+    # Border
+    pygame.draw.rect(surface, (255, 255, 255), (x, y, width, height), 2)
 
 
 dragging_item = None
@@ -348,6 +431,7 @@ def handle_mouse_events(event, screen_height):
                     dragging_item.return_time,
                     dragging_item.damage,
                     dragging_item.name,
+                    dragging_item.rarity_color,
                 )
                 loadout[i] = item
                 placed = True
@@ -371,15 +455,16 @@ def handle_mouse_events(event, screen_height):
 # petals = [basic for i in range(PETAL_COUNT)]
 drops = []
 mobs = []
-NUM_MOBS = 10
+spawns = [cbee, ubee]
+MAX_MOBS = 100
 
 # i * (360 // PETAL_COUNT) notTODO notIMPORTANT
 
 
-for _ in range(NUM_MOBS):
-    x = random.randint(0, MAP_WIDTH)
-    y = random.randint(0, MAP_HEIGHT)
-    mobs.append(Mob(x, y, drops = [Drop(0, 0, pollen), Drop(0, 0, stinger), Drop(0, 0, missile)], size=40, health=37))
+# for _ in range(NUM_MOBS):
+#     x = random.randint(0, MAP_WIDTH)
+#     y = random.randint(0, MAP_HEIGHT)
+#     mobs.append(Mob(x, y, drops = [Drop(0, 0, pollen), Drop(0, 0, stinger), Drop(0, 0, missile)], size=40, health=37))
 
 
 running = True
@@ -395,21 +480,32 @@ while running:
 
     # Movement keys
     keys = pygame.key.get_pressed()
-    if keys[pygame.K_w] or keys[pygame.K_UP]:
-        player_pos[1] -= player_speed
-    if keys[pygame.K_s] or keys[pygame.K_DOWN]:
-        player_pos[1] += player_speed
-    if keys[pygame.K_a] or keys[pygame.K_LEFT]:
-        player_pos[0] -= player_speed
-    if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
-        player_pos[0] += player_speed
+    if knockback_timer > 0:
+        player_pos[0] += knockback_dx
+        player_pos[1] += knockback_dy
+        knockback_timer -= 1
+    else:
+        # Normal WASD movement
+        if keys[pygame.K_w] or keys[pygame.K_UP]:
+            player_pos[1] -= player_speed
+        if keys[pygame.K_s] or keys[pygame.K_DOWN]:
+            player_pos[1] += player_speed
+        if keys[pygame.K_a] or keys[pygame.K_LEFT]:
+            player_pos[0] -= player_speed
+        if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
+            player_pos[0] += player_speed
+
     if keys[pygame.K_SPACE]:
         mouse_x, mouse_y = pygame.mouse.get_pos()
+        petal_radius = 100
         for petal in loadout:
             if petal:
                 if petal.shootable:
                     if petal.state == "orbiting":
                         petal.shoot(mouse_x, mouse_y)
+    else:
+        petal_radius = 50
+                
                 
     if keys[pygame.K_LSHIFT]:
         mouse_x, mouse_y = pygame.mouse.get_pos()
@@ -443,25 +539,30 @@ while running:
 
     update_camera(player_pos)
 
-    # Draw loadout and inventory
+    # Draw health bar
 
-    draw_inventory(screen)
-    draw_loadout(screen)
+    draw_health_bar(screen, int(player_pos[0] - camera_x) - 2 * player_radius,
+                    int(player_pos[1] - camera_y) + player_radius + 10, player_health, player_max_health)
 
-    if dragging_item:
-        font = pygame.font.SysFont(None, 24)
-        mouse_x, mouse_y = pygame.mouse.get_pos()
-        # text = font.render(dragging_item.name[0], True, dragging_item.color)
-        pygame.draw.circle(screen, dragging_item.color, (mouse_x, mouse_y), 10)
-        # screen.blit(text, (mouse_x, mouse_y))
+    
         
 
 
-    # Spawn and draw mobs
+    # (De)Spawn and draw mobs
+    for spawn in spawns:
+        if random.random() < 0.005:
+            mob = Mob(
+                x = spawn.x,
+                y = spawn.y,
+                size = spawn.radius,
+                texture = spawn.texture,
+                health = spawn.health,
+                drops = spawn.drops
+            )
+            mobs.append(mob)
 
-    if random.random() < 0.01:
-        mob = Mob(500, 500, drops = [Drop(0, 0, pollen), Drop(0, 0, stinger), Drop(0, 0, missile)], size=40, health=37)
-        mobs.append(mob)
+    while len(mobs) > MAX_MOBS:
+        mobs.pop()
 
     for mob in mobs[:]:
         mob.update(player_pos)
@@ -493,6 +594,18 @@ while running:
                         except:
                             pass
 
+            dx = mob.x - player_pos[0]
+            dy = mob.y - player_pos[1]
+            dist = max(1, (dx**2 + dy**2)**0.5)
+            if dist < mob.radius + player_radius:
+                player_health -= mob.damage  # Damage player
+                if player_health <= 0:
+                    print("Game Over!")
+                    running = False
+                knockback_dx = -(dx / dist) * 10  # strength of knockback
+                knockback_dy = -(dy / dist) * 10
+                knockback_timer = 15  # frames of knockback
+
     # Handle collisions between mobs
     for i in range(len(mobs)):
         for j in range(i + 1, len(mobs)):
@@ -522,6 +635,19 @@ while running:
                 mob1.dy -= ny * 0.5
                 mob2.dx += nx * 0.5
                 mob2.dy += ny * 0.5
+
+    # Draw loadout and inventory
+
+    draw_inventory(screen)
+    draw_loadout(screen)
+
+    if dragging_item:
+        font = pygame.font.SysFont(None, 24)
+        mouse_x, mouse_y = pygame.mouse.get_pos()
+        # text = font.render(dragging_item.name[0], True, dragging_item.color)
+        # pygame.draw.circle(screen, dragging_item.color, (mouse_x, mouse_y), 10)
+        screen.blit(dragging_item.color, (mouse_x-dragging_item.radius, mouse_y-dragging_item.radius))
+        # screen.blit(text, (mouse_x, mouse_y))
 
 
 
@@ -556,20 +682,28 @@ while running:
                 pollen = drop.petal.pollen,
                 ret_time = drop.petal.return_time,
                 damage = drop.petal.damage,
-                name = drop.petal.name
+                name = drop.petal.name,
+                rarity_color = drop.petal.rarity_color
             )
             # petals.append(new_petal)  # keep the drop
             
             # inventory.append((new_petal, 1))  # keep the drop
             for idx in range(INVENTORY_COLS * INVENTORY_ROWS):
-                if (not inventory[idx] or inventory[idx][0].name == new_petal.name):
-                    if not inventory[idx]:
-                        inventory[idx] = (new_petal, 1)
-                    else:
-                        inventory[idx] = (inventory[idx][0], inventory[idx][1]+1)
+                # if (not inventory[idx] or (inventory[idx][0].name == new_petal.name and
+                #                            inventory[idx][0].rarity_color == new_petal.rarity_color)):
+                #     if not inventory[idx]:
+                #         inventory[idx] = (new_petal, 1)
+                #     else:
+                #         inventory[idx] = (inventory[idx][0], inventory[idx][1]+1)
+                #     break
+                new_stack = stack(inventory[idx], new_petal)
+                if new_stack:
+                    inventory[idx] = new_stack
                     break
+
             
-            break
+            
+            
 
     
 
